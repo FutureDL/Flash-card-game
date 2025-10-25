@@ -1,0 +1,28 @@
+{
+    "Apple": {
+        "definition:": "\u7c91\u7c91a",
+        "example:": "I like apple"
+    },
+    "Bananna": {
+        "definition:": "\u7c91\u7c91b",
+        "example:": "I like bananna"
+    },
+    "Orange": {
+        "definition:": "\u7c91\u7c91o",
+        "example:": "I like orange"
+    },
+    "Pineapple": {
+        "definition:": "\u7c91\u7c91p",
+        "example:": "I like pineapple"
+    },
+    "SugarCanes": {
+        "definition:": "\u7c91\u7c91s",
+        "example:": "I like sugarcanes"
+    },
+    "XXX": {
+        "Name": "Vocab_list1.xlsx",
+        "CurrentNum": -1,
+        "Completed": true,
+        "Learning": true
+    }
+}
