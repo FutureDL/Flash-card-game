@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from datetime import datetime
-from typing import Any, Dict, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 
 def _parse_datetime(value: Any) -> Optional[datetime]:
@@ -72,6 +72,8 @@ class CardState:
     last_review: Optional[datetime] = None
     lapses: int = 0
     repetitions: int = 0
+    new_buried: bool = False
+    history: List[Dict[str, Any]] = field(default_factory=list)
     custom_data: Dict[str, Any] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
@@ -110,6 +112,17 @@ class CardState:
             payload.get("repetitions", payload.get("reviews", 0) or 0) or 0
         )
         custom_data = dict(payload.get("custom_data", {}))
+        new_buried = bool(payload.get("new_buried", False))
+        raw_history = payload.get("history", [])
+        history: List[Dict[str, Any]] = []
+        if isinstance(raw_history, Sequence) and not isinstance(
+            raw_history, (str, bytes)
+        ):
+            for entry in raw_history:
+                if isinstance(entry, Mapping):
+                    history.append(dict(entry))
+                else:
+                    history.append({"value": entry})
 
         state = cls(
             word=word,
@@ -122,6 +135,8 @@ class CardState:
             last_review=last_review,
             lapses=lapses,
             repetitions=repetitions,
+            new_buried=new_buried,
+            history=history,
             custom_data=custom_data,
         )
 
@@ -138,6 +153,8 @@ class CardState:
             "lapses",
             "repetitions",
             "reviews",
+            "new_buried",
+            "history",
             "custom_data",
             "metadata",
         }
@@ -172,6 +189,20 @@ class CardState:
             self.repetitions = int(
                 payload.get("repetitions", payload.get("reviews", 0) or 0) or 0
             )
+        if "new_buried" in payload:
+            self.new_buried = bool(payload.get("new_buried"))
+        if "history" in payload:
+            raw_history = payload.get("history", [])
+            coerced: List[Dict[str, Any]] = []
+            if isinstance(raw_history, Sequence) and not isinstance(
+                raw_history, (str, bytes)
+            ):
+                for entry in raw_history:
+                    if isinstance(entry, Mapping):
+                        coerced.append(dict(entry))
+                    else:
+                        coerced.append({"value": entry})
+            self.history = coerced
         if "custom_data" in payload:
             self.custom_data = dict(payload.get("custom_data", {}))
         if "metadata" in payload:
@@ -190,6 +221,8 @@ class CardState:
             "lapses",
             "repetitions",
             "reviews",
+            "new_buried",
+            "history",
             "custom_data",
             "metadata",
         }
@@ -199,6 +232,13 @@ class CardState:
 
     def to_storage_dict(self) -> Dict[str, Any]:
         """Serialise the state into a JSON friendly dictionary."""
+
+        serialised_history: List[Dict[str, Any]] = []
+        for entry in self.history:
+            if isinstance(entry, Mapping):
+                serialised_history.append(dict(entry))
+            else:
+                serialised_history.append({"value": entry})
 
         data: Dict[str, Any] = {
             "definition:": self.definition,
@@ -210,6 +250,8 @@ class CardState:
             "last_review": _format_datetime(self.last_review),
             "lapses": self.lapses,
             "repetitions": self.repetitions,
+            "new_buried": self.new_buried,
+            "history": serialised_history,
         }
         if self.custom_data:
             data["custom_data"] = self.custom_data

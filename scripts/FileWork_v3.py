@@ -1,8 +1,9 @@
 import json
-import sys # Better system controll
-import pandas as pd #Excel processing
 import os
-from typing import Iterable, Sequence
+import sys  # Better system controll
+from typing import Any, Dict, Iterable, Mapping, MutableMapping, Sequence
+
+import pandas as pd  # Excel processing
 
 from scripts.card_state import CardState
 
@@ -72,7 +73,7 @@ def is_list_empty(lst):
 def _ensure_card_state(entry) -> CardState:
     if isinstance(entry, CardState):
         return entry
-    if isinstance(entry, dict):
+    if isinstance(entry, Mapping):
         word = entry.get("word") or entry.get("card_id")
         if not word:
             raise ValueError("Cannot convert dictionary entry to CardState without a word key")
@@ -120,6 +121,85 @@ def readFromJson(path):
             return vocab_list
         else:
             return vocab_list, listInfo
+
+
+def _load_vocab_payload(path: str) -> MutableMapping[str, Any]:
+    with open(path, "r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _write_vocab_payload(path: str, payload: Mapping[str, Any]) -> None:
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=4)
+
+
+def update_card_state(path: str, word_id: str, state: Any) -> None:
+    """Persist the latest :class:`CardState` for *word_id* in *path*."""
+
+    if not checkExist(path):
+        raise FileNotFoundError(f"Vocabulary file does not exist: {path}")
+
+    card_state = _ensure_card_state(state)
+    payload = _load_vocab_payload(path)
+
+    target_key = word_id if word_id in payload else card_state.word
+    if target_key not in payload:
+        # Fallback to lookup by stored card_id in case the key differs from the
+        # human readable word.
+        for key, value in payload.items():
+            if key == "XXX":
+                continue
+            if isinstance(value, Mapping) and value.get("card_id") == word_id:
+                target_key = key
+                break
+        else:
+            raise KeyError(f"Card '{word_id}' not found in {path}")
+
+    payload[target_key] = card_state.to_storage_dict()
+    _write_vocab_payload(path, payload)
+
+
+def append_review_log(path: str, log_entry: Mapping[str, Any]) -> Dict[str, Any]:
+    """Append *log_entry* to the history for a card in *path*.
+
+    The *log_entry* must contain either a ``card_id`` or ``word`` key so that
+    the corresponding record can be located. The updated card payload is
+    returned to the caller for further processing if needed.
+    """
+
+    if not checkExist(path):
+        raise FileNotFoundError(f"Vocabulary file does not exist: {path}")
+
+    if not isinstance(log_entry, Mapping):
+        raise TypeError("log_entry must be a mapping containing card metadata")
+
+    word_id = log_entry.get("card_id") or log_entry.get("word")
+    if not word_id:
+        raise ValueError("log_entry must define a 'card_id' or 'word' field")
+
+    payload = _load_vocab_payload(path)
+    entry_key = word_id if word_id in payload else None
+    if entry_key is None:
+        for key, value in payload.items():
+            if key == "XXX":
+                continue
+            if isinstance(value, Mapping) and value.get("card_id") == word_id:
+                entry_key = key
+                break
+
+    if entry_key is None or entry_key not in payload:
+        raise KeyError(f"Card '{word_id}' not found in {path}")
+
+    entry_payload = payload[entry_key]
+    history = entry_payload.get("history")
+    if not isinstance(history, list):
+        history = []
+    history.append(dict(log_entry))
+    entry_payload["history"] = history
+    payload[entry_key] = entry_payload
+
+    _write_vocab_payload(path, payload)
+    return entry_payload
     
 def getListInfo(path):
     if checkExist(path):
