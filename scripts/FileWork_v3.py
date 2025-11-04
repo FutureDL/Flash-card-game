@@ -3,13 +3,6 @@ import sys # Better system controll
 import pandas as pd #Excel processing
 import os
 
-DEFAULT_CARD_STATE = {
-    "stability": None,
-    "difficulty": None,
-    "last_review": None,
-    "due": None,
-}
-
 current_directory = os.getcwd()# Get the current working directory
 print(f"Current directory: {current_directory}")
 
@@ -73,29 +66,16 @@ def importFromExcel(path):
 def is_list_empty(lst):
     return not lst  
 
-def _ensure_card_state(card: dict) -> bool:
-    """Ensure a card dictionary has all scheduling fields.
-
-    Returns True if the card was modified."""
-    updated = False
-    for field, default_value in DEFAULT_CARD_STATE.items():
-        if field not in card:
-            card[field] = default_value
-            updated = True
-    return updated
-
-
 def writeIntoJson(vocab_list:list, path:str):
     if checkExist(path) == False:
         vocab = {}
         for i in vocab_list:
             vocab[i[0]] = {
                 "definition:":i[1],
-                "example:":i[2],
+                "example:":i[2]
             }
-            _ensure_card_state(vocab[i[0]])
-
-        list = path.split("/")
+            
+        list = path.split("/") 
         vocab["XXX"] = {
             "Name":os.path.splitext(list[len(list)-1])[0],
             "CurrentNum":1,
@@ -115,13 +95,6 @@ def readFromJson(path):
         with open(path, "r", encoding='utf-8') as f:
             loaded_vocab = json.load(f)
 
-        updated = False
-        for word, info in loaded_vocab.items():
-            if word == "XXX":
-                continue
-            if _ensure_card_state(info):
-                updated = True
-
         # Print nicely
         vocab_list = []
         for word, info in loaded_vocab.items():
@@ -130,10 +103,6 @@ def readFromJson(path):
                 vocab_list.append(vocab)
             else:
                 listInfo = [info['Name'], info['CurrentNum'], info['Completed'], info['Learning']]
-        if updated:
-            with open(path, "w", encoding='utf-8') as f:
-                json.dump(loaded_vocab, f, indent=4)
-
         if listInfo == None:
             return vocab_list
         else:
@@ -145,38 +114,14 @@ def getListInfo(path):
     
 def writeListInfo(path, name:str = None, currentNum:int = None, completed:bool = None, learning:bool = None):
     with open(path, 'r+', encoding='utf-8') as f:
-        data = json.load(f)
+        data = json.load(f)  
         data["XXX"]['Name'] = name if name != None else data["XXX"]['Name']
         data["XXX"]['CurrentNum'] = currentNum if currentNum != None else data["XXX"]['CurrentNum']
         data["XXX"]['Completed'] = completed if completed != None else data["XXX"]['Completed']
         data["XXX"]['Learning'] = learning if learning != None else data["XXX"]['Learning']
         f.seek(0)
         json.dump(data, f, indent=4)
-        f.truncate()
-
-
-def update_card_state(path: str, word_id: str, state: dict):
-    """Update scheduling information for a single vocabulary entry."""
-    if not checkExist(path):
-        raise FileNotFoundError(f"File not found: {path}")
-
-    with open(path, "r+", encoding="utf-8") as f:
-        data = json.load(f)
-
-        if word_id not in data or word_id == "XXX":
-            raise KeyError(f"Word '{word_id}' not found in {path}")
-
-        card = data[word_id]
-        _ensure_card_state(card)
-
-        allowed_fields = set(DEFAULT_CARD_STATE.keys())
-        for field, value in state.items():
-            if field in allowed_fields:
-                card[field] = value
-
-        f.seek(0)
-        json.dump(data, f, indent=4)
-        f.truncate()
+        f.truncate() 
         
 def checkExist(path) -> bool:
     filepath = path
@@ -207,30 +152,34 @@ def getFileName():
         files.remove('res/Vocab List/.DS_Store')
     return files
 
-if __name__ == "__main__":
-    importFromExcel("YourLists")
-    # writeListInfo("others/json/","testList")
+importFromExcel("YourLists")
+# writeListInfo("others/json/","testList")
 
 
-    # vocab_list = [
-    #     ["whoever","""[pron.] 无论谁；…的那个人（或那些人）；…的任何人；不管什么人
-    # [网络] 爱谁谁；究竟是谁；无论是谁""",""" [1] Claudia is right, I mean two days ago you were fighting with her and telling whoever wanted to listen that you were happy with Minmei.
-    # [2] Whoever curses his father or his mother, his lamp shall be put out in deep darkness.
-    # [3] We were in front of a bar and he ducked slightly, peering in, but whoever he was looking for did not seem to be there."""]
-    # ,
-    #     ["argue","""[v.] 争论；争辩；争吵；论证
-    # [网络] 辩论；说服；主张""","""[1] it seems useless for you to argue further with him.
-    # [2] While gold supply is well understood, silver bulls and bears argue about just how much silver is out there.
-    # [3] Sullivan sighed, but he did not argue. ""I think I'll miss you, Jonathan, "" was all he said."""],
-    #     ["behalf","""[n.] 利益
-    # [网络] 方面；支持；维护""","""[1] Isaac prayed to the Lord on behalf of his wife, because she was barren.
-    # [2] You will also learn about our many operations on your behalf, to prevent the dark Ones from destroying you and Mother Earth.
-    # [3] The United States is ready to join a global effort on behalf of new jobs and sustainable growth."""]]
+# vocab_list = [
+#     ["whoever","""[pron.] 无论谁；…的那个人（或那些人）；…的任何人；不管什么人
+# [网络] 爱谁谁；究竟是谁；无论是谁""",""" [1] Claudia is right, I mean two days ago you were fighting with her and telling whoever wanted to listen that you were happy with Minmei.
+# [2] Whoever curses his father or his mother, his lamp shall be put out in deep darkness.
+# [3] We were in front of a bar and he ducked slightly, peering in, but whoever he was looking for did not seem to be there."""],
+#     ["argue","""[v.] 争论；争辩；争吵；论证
+# [网络] 辩论；说服；主张""","""[1] it seems useless for you to argue further with him.
+# [2] While gold supply is well understood, silver bulls and bears argue about just how much silver is out there.
+# [3] Sullivan sighed, but he did not argue. ""I think I'll miss you, Jonathan, "" was all he said."""],
+#     ["behalf","""[n.] 利益
+# [网络] 方面；支持；维护""","""[1] Isaac prayed to the Lord on behalf of his wife, because she was barren.
+# [2] You will also learn about our many operations on your behalf, to prevent the dark Ones from destroying you and Mother Earth.
+# [3] The United States is ready to join a global effort on behalf of new jobs and sustainable growth."""]]
 
 
-    # writeIntoJson(vocab_list, "others/json/hahha.json")
-    # print(readFromJson("others/json/hahha.json"))
-    # print(getListInfo("others/json/hahha.json"))
+# writeIntoJson(vocab_list, "others/json/hahha.json")
+# print(readFromJson("others/json/hahha.json"))
+# print(getListInfo("others/json/hahha.json"))
 
-    # writeListInfo("others/json/hahha.json", "jack", 3,False)
-    print(getFileName())
+# writeListInfo("others/json/hahha.json", "jack", 3,False)
+print(getFileName())
+
+
+
+
+# Stored basic list data in json file
+# Added list info at line 102. [name(str), CurrentNum(int), Completed(bool), Learning(bool)]
