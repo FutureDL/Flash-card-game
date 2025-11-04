@@ -5,6 +5,7 @@ import os
 import scripts.ListWork_v3 as lw
 import scripts.FileWork_v3 as fw
 import scripts.MC_Question_Set_v3 as QuestionSet
+import scripts.fsrs_scheduler as srs
 import scripts.GameLaunch_v2 as GameLaunch
 
 class MainPage(ft.Container):
@@ -254,12 +255,15 @@ class MainPage(ft.Container):
             self.game_area.content.controls[1].disabled = False
             
             # recieve the selected options
-            selected = []
-            for i in self.list_area.controls:
-                if i.content.controls[0].value:
-                    selected.append(i.content.controls[1].content.value)
-            print(selected)
-            
+            selected_names = []
+            selected_paths = []
+            for index, item in enumerate(self.list_area.controls):
+                if item.content.controls[0].value:
+                    selected_names.append(item.content.controls[1].content.value)
+                    if index < len(self.Vocab_List_Paths):
+                        selected_paths.append(self.Vocab_List_Paths[index])
+            print(selected_names)
+
             # hide the tickboxes
             self.selectmode = False
             for i in self.list_area.controls:
@@ -267,28 +271,29 @@ class MainPage(ft.Container):
                 i.content.controls[0].visible = False
                 i.content.controls[2].disabled = False
             print("Selection mode disabled")
-            
+
             # Start the practice if there's any list selected
-            if selected != []:
-                # Combine the selected lists into one
-                vocab_lists = []
-                for i in selected:
-                    if i == 'WordBook':
-                        list = fw.readFromJson(f"res/ListBook/{i}.json")[0]
+            if selected_paths:
+                cards = srs.load_cards(selected_paths)
+                if not cards:
+                    self._show_message("The selected lists do not contain any cards.")
+                else:
+                    due_cards = srs.filter_due_cards(cards)
+                    if not due_cards:
+                        self._show_message("No cards are due for review right now.")
                     else:
-                        list = fw.readFromJson(f"res/Vocab List/{i}.json")[0]
-                    vocab_lists = vocab_lists + list
-                
-                # hide the components in the main page
-                for i in self.mainpage.controls:
-                    i.visible = False
-                
-                # Show the the question page
-                self.mainpage.controls.append(QuestionSet.MC_Question_Set(vocab_lists, on_exit=self.end_practice))
-            
+                        # hide the components in the main page
+                        for i in self.mainpage.controls:
+                            i.visible = False
+
+                        # Show the the question page
+                        self.mainpage.controls.append(
+                            QuestionSet.MC_Question_Set(cards, on_exit=self.end_practice)
+                        )
+
         self.content.update()
         ...
-    
+
     # The function for ending practice
     def end_practice(self,msg):
         # remove the practice page
@@ -299,6 +304,11 @@ class MainPage(ft.Container):
             component.visible = True if i <= 1 else False
         self.content.update()
         print("Practice closed!")
+
+    def _show_message(self, text: str):
+        self.page.snack_bar = ft.SnackBar(ft.Text(text))
+        self.page.snack_bar.open = True
+        self.page.update()
     
     
     ## New:
@@ -364,6 +374,7 @@ class MainPage(ft.Container):
         
     # Function for displaying the loaded lists in the vocab area
     def displayLists(self, Vocab_List_Names:list):
+        self.Vocab_List_Paths = Vocab_List_Names
         if self.list_area in self.vocab_area.content.controls:
             self.vocab_area.content.controls.remove(self.list_area)
 
