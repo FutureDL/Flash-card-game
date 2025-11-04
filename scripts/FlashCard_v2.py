@@ -56,6 +56,12 @@ class FlashCard(ft.Container):
         self.flipped = not self.flipped
         self.body.content = self.vocabInfo if self.flipped else self.vocab
         self.update()
+
+    def set_index(self, index: int):
+        self.index = index
+        self.vocabIndex.value = str(index)
+        if hasattr(self.vocabIndex, "update"):
+            self.vocabIndex.update()
         
     def labeled_divider(self, label: str):
             divider = ft.Row(

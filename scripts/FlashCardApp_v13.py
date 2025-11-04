@@ -478,13 +478,13 @@ class MainPage(ft.Container):
         #     path = "res/Vocab List"
             
         vocab_list, info = fw.readFromJson(self.Vocab_List_Paths[e.control.data])
-        
-        print(vocab_list)
-        # self.Vocab_lists.append(vocab_list)
-        print("yay")
-        self.current_set = CardSet.FlashCardSet(vocab_list, info[1], info[2], info[3])
+        sorted_vocab = sorted(
+            vocab_list,
+            key=lambda item: item[3].due if len(item) >= 4 else float('inf')
+        )
+
+        self.current_set = CardSet.FlashCardSet(sorted_vocab, info[1], info[2], info[3], list_path=self.Vocab_List_Paths[e.control.data])
         self.current_set_name = self.Vocab_List_Paths[e.control.data]
-        print("yay")
         self.mainpage.controls.append(self.current_set)
         
         # Add the control buttons
@@ -496,9 +496,8 @@ class MainPage(ft.Container):
         )
         
         # Disable the finish button if list is not completed first
-        if(self.current_set.getStatus() != True):
-            self.list_control_buttons.controls[1].disabled = True
-            
+        self.list_control_buttons.controls[1].disabled = not self.current_set.getStatus()
+
         # Change the attribute for learning
         fw.writeListInfo(self.current_set_name, learning=True)
             
@@ -510,14 +509,9 @@ class MainPage(ft.Container):
         now = time.time()
         if now - self.last_refresh > 0.1:
             if(self.listopen == True): # Check the indication
-                # Check if the user have reached the last page(以后会用文件记录数据，目前数据无法保存)
-                if(self.current_set.getIndex() == self.current_set.getLength() or self.current_set.getStatus() == True):
-                    # If yes enables the "finish" button
-                    print(self.current_set.getIndex()," ", self.current_set.getLength())
+                if(self.current_set.getStatus() == True):
                     self.list_control_buttons.controls[1].disabled = False
-                    # Also alter the "Completed attribute" in flashcard set
                     fw.writeListInfo(self.current_set_name, completed=True)
-                    
                 else:
                     self.list_control_buttons.controls[1].disabled = True
                 self.content.update()
