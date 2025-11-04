@@ -2,6 +2,9 @@ import json
 import sys # Better system controll
 import pandas as pd #Excel processing
 import os
+from typing import Iterable, Sequence
+
+from scripts.card_state import CardState
 
 current_directory = os.getcwd()# Get the current working directory
 print(f"Current directory: {current_directory}")
@@ -66,16 +69,27 @@ def importFromExcel(path):
 def is_list_empty(lst):
     return not lst  
 
-def writeIntoJson(vocab_list:list, path:str):
+def _ensure_card_state(entry) -> CardState:
+    if isinstance(entry, CardState):
+        return entry
+    if isinstance(entry, dict):
+        word = entry.get("word") or entry.get("card_id")
+        if not word:
+            raise ValueError("Cannot convert dictionary entry to CardState without a word key")
+        return CardState.from_storage(word, entry)
+    if isinstance(entry, Sequence) and not isinstance(entry, (str, bytes)) and len(entry) >= 3:
+        return CardState.from_components(entry[0], entry[1], entry[2])
+    raise TypeError("Unsupported vocab entry format")
+
+
+def writeIntoJson(vocab_list: Iterable, path: str):
     if checkExist(path) == False:
         vocab = {}
-        for i in vocab_list:
-            vocab[i[0]] = {
-                "definition:":i[1],
-                "example:":i[2]
-            }
-            
-        list = path.split("/") 
+        for entry in vocab_list:
+            card_state = _ensure_card_state(entry)
+            vocab[card_state.word] = card_state.to_storage_dict()
+
+        list = path.split("/")
         vocab["XXX"] = {
             "Name":os.path.splitext(list[len(list)-1])[0],
             "CurrentNum":1,
@@ -99,8 +113,7 @@ def readFromJson(path):
         vocab_list = []
         for word, info in loaded_vocab.items():
             if word != "XXX":
-                vocab = [word, info['definition:'], info['example:']]
-                vocab_list.append(vocab)
+                vocab_list.append(CardState.from_storage(word, info))
             else:
                 listInfo = [info['Name'], info['CurrentNum'], info['Completed'], info['Learning']]
         if listInfo == None:

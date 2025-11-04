@@ -176,8 +176,13 @@ def main(page:ft.Page):
     page.padding = 30
     
     import FileWork_v3 as fw
-    vocab_list = fw.readFromJson("others/json/question_test.json")
-    page.add(MC_Question_Set(vocab_list[:5]))
+    data = fw.readFromJson("others/json/question_test.json")
+    if isinstance(data, tuple):
+        vocab_list = data[0]
+    else:
+        vocab_list = data
+    vocab_rows = [card.to_vocab_row() for card in vocab_list]
+    page.add(MC_Question_Set(vocab_rows[:5]))
     page.update()
 
 if __name__ == "__main__":

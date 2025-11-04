@@ -1,9 +1,12 @@
 import flet as ft
 
+from scripts.card_state import CardState
+
 class FlashCard(ft.Container):
-    def __init__(self, index, vocabulary, definition, example):
+    def __init__(self, index: int, card_state: CardState):
         super().__init__()
         self.index = index
+        self.card_state = card_state
         self.flipped = False
 
         # Index label (always pinned top-left)
@@ -11,7 +14,7 @@ class FlashCard(ft.Container):
 
         # Front side (vocab centered)
         self.vocab = ft.Container(
-            content=ft.Text(value=vocabulary, size=60, weight=ft.FontWeight.BOLD),
+            content=ft.Text(value=self.card_state.word, size=60, weight=ft.FontWeight.BOLD),
             alignment=ft.alignment.center,
             # expand=True,
         )
@@ -20,9 +23,9 @@ class FlashCard(ft.Container):
         self.vocabInfo = ft.Container(
             content=ft.Column(
                 controls=[
-                    ft.Text(value=vocabulary, size=40, weight=ft.FontWeight.BOLD),
+                    ft.Text(value=self.card_state.word, size=40, weight=ft.FontWeight.BOLD),
                     self.labeled_divider("Definition"),  # line after vocab
-                    ft.Text(value=definition, size=20, text_align=ft.TextAlign.LEFT),
+                    ft.Text(value=self.card_state.definition, size=20, text_align=ft.TextAlign.LEFT),
                 ],
                 alignment=ft.MainAxisAlignment.START,         # vertical: start from top
                 horizontal_alignment=ft.CrossAxisAlignment.START,  # horizontal: align left
@@ -31,9 +34,11 @@ class FlashCard(ft.Container):
             padding=100,                       # 30px padding from edges
             expand=True
         )
-        
+
         self.vocabInfo.content.controls.append(self.labeled_divider("Example Sentence"))
-        self.vocabInfo.content.controls.append(ft.Text(value=example, size=20, text_align=ft.TextAlign.LEFT))
+        self.vocabInfo.content.controls.append(
+            ft.Text(value=self.card_state.example, size=20, text_align=ft.TextAlign.LEFT)
+        )
 
         # A container that will switch between vocab and vocabInfo
         self.body = ft.Container(content=self.vocab, expand=True)

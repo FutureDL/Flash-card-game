@@ -273,7 +273,13 @@ def main(page: ft.Page):
     page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
     page.padding = 30
 
-    page.add(GameLaunch([fw.readFromJson("others/json/question_test.json")]))
+    data = fw.readFromJson("others/json/question_test.json")
+    if isinstance(data, tuple):
+        vocab_states = data[0]
+    else:
+        vocab_states = data
+    vocab_rows = [state.to_vocab_row() for state in vocab_states]
+    page.add(GameLaunch([vocab_rows]))
 
 if __name__ == "__main__":
     ft.app(target=main)
