@@ -6,6 +6,7 @@ import scripts.ListWork_v3 as lw
 import scripts.FileWork_v3 as fw
 import scripts.MC_Question_Set_v3 as QuestionSet
 import scripts.GameLaunch_v2 as GameLaunch
+from scripts.card_state import CardState
 
 class MainPage(ft.Container):
     def __init__(self, page:ft.Page):
@@ -215,7 +216,8 @@ class MainPage(ft.Container):
         # Use the generate list function in the ListWork tool file
         # vocab_list = fw.readFromJson(self.Vocab_list_names[0])
         print(self.Vocab_lists[0])
-        new_lists = lw.generateList(self.Vocab_lists[0],generate_num,generate_length)
+        source_rows = [card.to_vocab_row() for card in self.Vocab_lists[0]]
+        new_lists = lw.generateList(source_rows,generate_num,generate_length)
         # Add the new lists into the list for Vocab lists.
         for i in range(len(new_lists)):
             self.generated_num += 1
@@ -224,8 +226,9 @@ class MainPage(ft.Container):
                 if fw.checkExist(path):
                     self.generated_num += 1
                 else:
-                    self.Vocab_lists.append(new_lists[i])
-                    fw.writeIntoJson(new_lists[i], path)
+                    card_states = [CardState.from_components(*entry) for entry in new_lists[i]]
+                    self.Vocab_lists.append(card_states)
+                    fw.writeIntoJson(card_states, path)
                     self.Vocab_List_Paths.append(path)
                     break
                 
@@ -274,10 +277,10 @@ class MainPage(ft.Container):
                 vocab_lists = []
                 for i in selected:
                     if i == 'WordBook':
-                        list = fw.readFromJson(f"res/ListBook/{i}.json")[0]
+                        list_states = fw.readFromJson(f"res/ListBook/{i}.json")[0]
                     else:
-                        list = fw.readFromJson(f"res/Vocab List/{i}.json")[0]
-                    vocab_lists = vocab_lists + list
+                        list_states = fw.readFromJson(f"res/Vocab List/{i}.json")[0]
+                    vocab_lists = vocab_lists + [state.to_vocab_row() for state in list_states]
                 
                 # hide the components in the main page
                 for i in self.mainpage.controls:
@@ -347,10 +350,10 @@ class MainPage(ft.Container):
                 vocab_lists = []
                 for i in selected:
                     if i == 'WordBook':
-                        list = fw.readFromJson(f"res/ListBook/{i}.json")[0]
+                        list_states = fw.readFromJson(f"res/ListBook/{i}.json")[0]
                     else:
-                        list = fw.readFromJson(f"res/Vocab List/{i}.json")[0]
-                    vocab_lists.append(list)
+                        list_states = fw.readFromJson(f"res/Vocab List/{i}.json")[0]
+                    vocab_lists.append([state.to_vocab_row() for state in list_states])
                 
                 # hide the components in the main page
                 for i in self.mainpage.controls:
