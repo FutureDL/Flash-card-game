@@ -3,6 +3,8 @@ import sys # Better system controll
 import pandas as pd #Excel processing
 import os
 
+from scripts import Scheduler_v1 as scheduler
+
 current_directory = os.getcwd()# Get the current working directory
 print(f"Current directory: {current_directory}")
 
@@ -70,9 +72,14 @@ def writeIntoJson(vocab_list:list, path:str):
     if checkExist(path) == False:
         vocab = {}
         for i in vocab_list:
+            if len(i) >= 4 and isinstance(i[3], scheduler.CardState):
+                state_dict = i[3].to_dict()
+            else:
+                state_dict = scheduler.default_card_state().to_dict()
             vocab[i[0]] = {
                 "definition:":i[1],
-                "example:":i[2]
+                "example:":i[2],
+                "fsrs_state": state_dict,
             }
             
         list = path.split("/") 
@@ -97,12 +104,20 @@ def readFromJson(path):
 
         # Print nicely
         vocab_list = []
+        dirty = False
         for word, info in loaded_vocab.items():
             if word != "XXX":
-                vocab = [word, info['definition:'], info['example:']]
+                state = scheduler.card_state_from_dict(info.get('fsrs_state'))
+                if 'fsrs_state' not in info:
+                    info['fsrs_state'] = state.to_dict()
+                    dirty = True
+                vocab = [word, info['definition:'], info['example:'], state]
                 vocab_list.append(vocab)
             else:
                 listInfo = [info['Name'], info['CurrentNum'], info['Completed'], info['Learning']]
+        if dirty:
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(loaded_vocab, f, indent=4)
         if listInfo == None:
             return vocab_list
         else:
@@ -114,14 +129,25 @@ def getListInfo(path):
     
 def writeListInfo(path, name:str = None, currentNum:int = None, completed:bool = None, learning:bool = None):
     with open(path, 'r+', encoding='utf-8') as f:
-        data = json.load(f)  
+        data = json.load(f)
         data["XXX"]['Name'] = name if name != None else data["XXX"]['Name']
         data["XXX"]['CurrentNum'] = currentNum if currentNum != None else data["XXX"]['CurrentNum']
         data["XXX"]['Completed'] = completed if completed != None else data["XXX"]['Completed']
         data["XXX"]['Learning'] = learning if learning != None else data["XXX"]['Learning']
         f.seek(0)
         json.dump(data, f, indent=4)
-        f.truncate() 
+        f.truncate()
+
+
+def writeCardState(path: str, vocab: str, state: scheduler.CardState):
+    with open(path, 'r+', encoding='utf-8') as f:
+        data = json.load(f)
+        if vocab not in data:
+            raise KeyError(f"'{vocab}' not found in {path}")
+        data[vocab]['fsrs_state'] = state.to_dict()
+        f.seek(0)
+        json.dump(data, f, indent=4)
+        f.truncate()
         
 def checkExist(path) -> bool:
     filepath = path
