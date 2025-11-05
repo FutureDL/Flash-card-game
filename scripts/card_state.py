@@ -9,37 +9,51 @@ records that the rest of the application persists to disk.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 
+def _ensure_utc(value: datetime) -> datetime:
+    """Normalise *value* to a UTC timezone aware datetime."""
+
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def _parse_datetime(value: Any) -> Optional[datetime]:
-    """Convert a JSON field into a :class:`datetime` if possible."""
+    """Convert a JSON field into a :class:`datetime` in UTC if possible."""
 
     if value in (None, "", 0):
         return None
     if isinstance(value, datetime):
-        return value
+        return _ensure_utc(value)
     if isinstance(value, (int, float)):
-        # Treat numeric timestamps as POSIX seconds.
         try:
-            return datetime.fromtimestamp(value)
+            return datetime.fromtimestamp(value, tz=timezone.utc)
         except (OverflowError, OSError, ValueError):
             return None
     if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
         try:
-            return datetime.fromisoformat(value)
+            if text.endswith("Z"):
+                parsed = datetime.fromisoformat(text[:-1])
+                return _ensure_utc(parsed)
+            parsed = datetime.fromisoformat(text)
+            return _ensure_utc(parsed)
         except ValueError:
             return None
     return None
 
 
 def _format_datetime(value: Optional[datetime]) -> Optional[str]:
-    """Serialise a datetime in ISO-8601 format for JSON storage."""
+    """Serialise a datetime in ISO-8601 format (UTC) for JSON storage."""
 
     if value is None:
         return None
-    return value.isoformat()
+    return _ensure_utc(value).isoformat().replace("+00:00", "Z")
 
 
 @dataclass
@@ -80,8 +94,8 @@ class CardState:
     card_id: Optional[str] = None
     stability: float = 0.0
     difficulty: float = 0.0
-    due: Optional[datetime] = None
-    last_review: Optional[datetime] = None
+    due_at: Optional[datetime] = None
+    last_review_at: Optional[datetime] = None
     lapses: int = 0
     repetitions: int = 0
     new_buried: bool = False
@@ -92,7 +106,7 @@ class CardState:
     phase: str = "new"
     last_success_at: Optional[datetime] = None
     same_day_success: int = 0
-    w_version: Optional[int] = None
+    w_version: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.card_id is None:
@@ -109,10 +123,7 @@ class CardState:
         ):
             self.last_success_at = _parse_datetime(self.last_success_at)
         if self.w_version not in (None, ""):
-            try:
-                self.w_version = int(self.w_version)  # type: ignore[arg-type]
-            except (TypeError, ValueError):
-                self.w_version = None
+            self.w_version = str(self.w_version)
         else:
             self.w_version = None
 
@@ -142,14 +153,11 @@ class CardState:
 
         phase_value = str(phase) if phase not in (None, "") else "new"
         parsed_success_at = _parse_datetime(last_success_at)
-        w_version_value: Optional[int]
+        w_version_value: Optional[str]
         if w_version in (None, ""):
             w_version_value = None
         else:
-            try:
-                w_version_value = int(w_version)  # type: ignore[arg-type]
-            except (TypeError, ValueError):
-                w_version_value = None
+            w_version_value = str(w_version)
 
         return cls(
             word=word,
@@ -172,8 +180,10 @@ class CardState:
         card_id = payload.get("card_id") or word
         stability = float(payload.get("stability", 0.0) or 0.0)
         difficulty = float(payload.get("difficulty", 0.0) or 0.0)
-        due = _parse_datetime(payload.get("due"))
-        last_review = _parse_datetime(payload.get("last_review"))
+        due = _parse_datetime(payload.get("due_at", payload.get("due")))
+        last_review = _parse_datetime(
+            payload.get("last_review_at", payload.get("last_review"))
+        )
         lapses = int(payload.get("lapses", 0) or 0)
         repetitions = int(
             payload.get("repetitions", payload.get("reviews", 0) or 0) or 0
@@ -186,10 +196,10 @@ class CardState:
         last_success_at = _parse_datetime(payload.get("last_success_at"))
         same_day_success = int(payload.get("same_day_success", 0) or 0)
         w_version_raw = payload.get("w_version")
-        try:
-            w_version = int(w_version_raw) if w_version_raw not in (None, "") else None
-        except (TypeError, ValueError):
+        if w_version_raw in (None, ""):
             w_version = None
+        else:
+            w_version = str(w_version_raw)
         raw_history = payload.get("history", [])
         history: List[Dict[str, Any]] = []
         if isinstance(raw_history, Sequence) and not isinstance(
@@ -208,8 +218,8 @@ class CardState:
             card_id=card_id,
             stability=stability,
             difficulty=difficulty,
-            due=due,
-            last_review=last_review,
+            due_at=due,
+            last_review_at=last_review,
             lapses=lapses,
             repetitions=repetitions,
             new_buried=new_buried,
@@ -231,7 +241,9 @@ class CardState:
             "stability",
             "difficulty",
             "due",
+            "due_at",
             "last_review",
+            "last_review_at",
             "lapses",
             "repetitions",
             "reviews",
@@ -267,9 +279,11 @@ class CardState:
         if "difficulty" in payload:
             self.difficulty = float(payload.get("difficulty") or 0.0)
         if "due" in payload:
-            self.due = _parse_datetime(payload.get("due"))
+            self.due_at = _parse_datetime(payload.get("due_at", payload.get("due")))
         if "last_review" in payload:
-            self.last_review = _parse_datetime(payload.get("last_review"))
+            self.last_review_at = _parse_datetime(
+                payload.get("last_review_at", payload.get("last_review"))
+            )
         if "lapses" in payload:
             self.lapses = int(payload.get("lapses") or 0)
         if "repetitions" in payload or "reviews" in payload:
@@ -308,12 +322,10 @@ class CardState:
             self.same_day_success = int(payload.get("same_day_success", 0) or 0)
         if "w_version" in payload:
             w_version_raw = payload.get("w_version")
-            try:
-                self.w_version = (
-                    int(w_version_raw) if w_version_raw not in (None, "") else None
-                )
-            except (TypeError, ValueError):
+            if w_version_raw in (None, ""):
                 self.w_version = None
+            else:
+                self.w_version = str(w_version_raw)
 
         known_keys = {
             "definition",
@@ -324,7 +336,9 @@ class CardState:
             "stability",
             "difficulty",
             "due",
+            "due_at",
             "last_review",
+            "last_review_at",
             "lapses",
             "repetitions",
             "reviews",
@@ -358,8 +372,8 @@ class CardState:
             "card_id": self.card_id,
             "stability": self.stability,
             "difficulty": self.difficulty,
-            "due": _format_datetime(self.due),
-            "last_review": _format_datetime(self.last_review),
+            "due_at": _format_datetime(self.due_at),
+            "last_review_at": _format_datetime(self.last_review_at),
             "lapses": self.lapses,
             "repetitions": self.repetitions,
             "new_buried": self.new_buried,
@@ -383,10 +397,48 @@ class CardState:
     # ------------------------------------------------------------------
     # Convenience helpers
     # ------------------------------------------------------------------
-    def reset_same_day_counters(self) -> None:
+    def reset_same_day_success(self) -> None:
         """Clear same-day review bookkeeping for the card."""
 
         self.same_day_success = 0
+
+    def mark_learning_success(
+        self,
+        event_time: Optional[Any] = None,
+        *,
+        promote_to: str = "review",
+        increment_same_day: bool = True,
+    ) -> None:
+        """Record a successful learning step and update phase counters.
+
+        Parameters
+        ----------
+        event_time:
+            Timestamp of the review event. ``None`` defaults to the current
+            UTC time.
+        promote_to:
+            Phase assigned after a successful learning review. Defaults to
+            ``"review"``.
+        increment_same_day:
+            When ``True`` the :attr:`same_day_success` counter is incremented.
+        """
+
+        timestamp = _parse_datetime(event_time) if event_time is not None else None
+        if timestamp is None:
+            timestamp = datetime.now(tz=timezone.utc)
+        self.last_success_at = timestamp
+        if increment_same_day:
+            try:
+                self.same_day_success += 1
+            except TypeError:
+                self.same_day_success = 1
+        if promote_to:
+            self.phase = promote_to
+
+    def update_phase(self, phase: str) -> None:
+        """Assign :attr:`phase` to *phase* after normalising the value."""
+
+        self.phase = str(phase or "new").lower()
 
     def advance_phase(
         self,
@@ -442,4 +494,23 @@ class CardState:
         """Return a new instance with *changes* applied."""
 
         return replace(self, **changes)
+
+    # ------------------------------------------------------------------
+    # Backwards compatible property aliases
+    # ------------------------------------------------------------------
+    @property
+    def due(self) -> Optional[datetime]:
+        return self.due_at
+
+    @due.setter
+    def due(self, value: Optional[Any]) -> None:
+        self.due_at = _parse_datetime(value) if value is not None else None
+
+    @property
+    def last_review(self) -> Optional[datetime]:
+        return self.last_review_at
+
+    @last_review.setter
+    def last_review(self, value: Optional[Any]) -> None:
+        self.last_review_at = _parse_datetime(value) if value is not None else None
 
