@@ -1,278 +1,454 @@
+"""Utilities for loading vocabulary decks and FSRS scheduling state."""
+
+from __future__ import annotations
+
 import json
 import os
-import sys  # Better system controll
-from typing import Any, Dict, Iterable, Mapping, MutableMapping, Sequence
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, Iterable, Iterator, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
-import pandas as pd  # Excel processing
+import pandas as pd
 
 from scripts.card_state import CardState
 
-current_directory = os.getcwd()# Get the current working directory
-print(f"Current directory: {current_directory}")
+# ---------------------------------------------------------------------------
+# Paths and constants
+# ---------------------------------------------------------------------------
+REPO_ROOT = Path(os.getcwd())
+DECK_ROOTS = [Path("res/ListBook"), Path("res/Vocab List")]
+STATE_ROOT = Path("res/state")
+STATE_FILE = STATE_ROOT / "card_state.jsonl"
+LOG_ROOT = Path("res/log")
+LOG_FILE = LOG_ROOT / "review_log.jsonl"
+DEFAULT_USER_ID = "default"
 
-def importFromExcel(path):
-    folder_path = os.path.join(current_directory, "YourLists") # Find the vocabulary excel documents
-    Excel_names = [i for i in os.listdir(folder_path) if i.endswith('.xlsx')]
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-    # Move the general word book 'Complete List.xlsx' to the first place of the list 
-    # if 'Complete List.xlsx' in Excel_names:
-    #     Excel_names.remove('Complete List.xlsx')
-    #     Excel_names.insert(0, 'Complete List.xlsx')
+def _utc_now() -> datetime:
+    return datetime.now(tz=timezone.utc)
 
-    # Build up file path
-    VocabListsPath = [] # file path
-    for i in range(len(Excel_names)): 
-        file_path_current = os.path.join(folder_path, Excel_names[i]) # Construct the file paths
-        if os.path.exists(file_path_current):
-            print(f"File found: {file_path_current}")
-            VocabListsPath.append(file_path_current)
-        else:
-            print(f"Vocab List file \"{Excel_names[i]}\" is missing") 
-            sys.exit()
 
-    # Read the Excel file
-    try: 
-        data = []
-        for i in range(len(VocabListsPath)):
-            data.append(pd.read_excel(VocabListsPath[i]))
-    except KeyError:
-        print("Please ensure all file imported is readable excel file!")
+def _ensure_parent(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
 
-    print("Importing data...")
-    
-    Vocab_lists = []
 
-    # Add all the data into vocab lists, and add it into the list of vocab lists
-    for i in range(len(data)):
-        list = []
-        for j in range(len(data[i]['Vocab:'])):
-            if pd.isna(data[i].at[j, 'Vocab:']) == False: # Check if the cell is empty 
-                card = [data[i]['Vocab:'][j],data[i]['Translation:'][j],data[i]['Example sentence:'][j]]
-                list.append(card)
-            else:
+def _normalise_user_id(user_id: Optional[str]) -> str:
+    return str(user_id) if user_id not in (None, "") else DEFAULT_USER_ID
+
+
+def _load_json(path: Path) -> MutableMapping[str, Any]:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    _ensure_parent(path)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=4, ensure_ascii=False)
+
+
+def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
+    if not path.exists():
+        return []
+    records: List[Dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            records.append(json.loads(line))
+    return records
+
+
+def _write_jsonl(path: Path, records: Iterable[Mapping[str, Any]]) -> None:
+    _ensure_parent(path)
+    with path.open("w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record, ensure_ascii=False))
+            handle.write("\n")
+
+
+def _state_record_key(record: Mapping[str, Any]) -> Tuple[str, str]:
+    user_id = _normalise_user_id(record.get("user_id"))
+    card_id = record.get("card_id") or record.get("word")
+    if not card_id:
+        raise ValueError("State records must define a card_id or word")
+    return user_id, str(card_id)
+
+
+def _state_to_record(state: CardState, *, user_id: Optional[str] = None) -> Dict[str, Any]:
+    key_user = _normalise_user_id(user_id or state.user_id)
+    card_id = state.card_id or state.word
+    payload = state.to_storage_dict()
+    payload.setdefault("word", state.word)
+    payload.setdefault("card_id", card_id)
+    return {
+        "user_id": key_user,
+        "card_id": card_id,
+        "word": state.word,
+        "state": payload,
+    }
+
+
+def _record_to_state(record: Mapping[str, Any]) -> CardState:
+    word = record.get("word") or record.get("card_id")
+    if not word:
+        raise ValueError("Invalid state record without word")
+    payload = record.get("state")
+    if isinstance(payload, Mapping):
+        data = dict(payload)
+    else:
+        data = {
+            key: value
+            for key, value in record.items()
+            if key not in {"user_id", "card_id", "word"}
+        }
+    state = CardState.from_storage(word, data)
+    if record.get("card_id"):
+        state.card_id = str(record["card_id"])
+    user_id = record.get("user_id")
+    if user_id not in (None, ""):
+        state.user_id = str(user_id)
+    else:
+        state.user_id = None
+    return state
+
+
+# ---------------------------------------------------------------------------
+# Deck import helpers
+# ---------------------------------------------------------------------------
+
+def importFromExcel(path: str) -> List[str]:
+    """Import Excel vocabulary lists from *path* into JSON decks."""
+
+    folder_path = REPO_ROOT / path
+    if not folder_path.exists():
+        raise FileNotFoundError(f"Excel directory not found: {folder_path}")
+
+    excel_names = [name for name in os.listdir(folder_path) if name.endswith(".xlsx")]
+    vocab_paths: List[Path] = []
+    for name in excel_names:
+        file_path = folder_path / name
+        if not file_path.exists():
+            raise FileNotFoundError(f"Vocab list file '{name}' is missing")
+        vocab_paths.append(file_path)
+
+    vocab_lists: List[List[Sequence[str]]] = []
+    for excel_path in vocab_paths:
+        frame = pd.read_excel(excel_path)
+        entries: List[Sequence[str]] = []
+        for _, row in frame.iterrows():
+            vocab = row.get("Vocab:")
+            if pd.isna(vocab):
                 break
-        Vocab_lists.append(list)
-    
-    # Check if there's empty lists, and add sth into it if there is to prevent causing error later
-    for i in range(len(Vocab_lists)):
-        if is_list_empty(Vocab_lists[i]) == True:
-            card = ["This vocab list is empty","N/A","N/A"]
-            Vocab_lists[i].append(card)
-    
-    # Add the vocab lists
-    for i in range(len(Vocab_lists)):
-        writeIntoJson(Vocab_lists[i], f"res/Vocab List/{Excel_names[i]}.json")
-        print("name:",Excel_names[i])
-    
-    return Excel_names
+            translation = row.get("Translation:")
+            example = row.get("Example sentence:")
+            entries.append([str(vocab), str(translation or ""), str(example or "")])
+        if not entries:
+            entries.append(["This vocab list is empty", "N/A", "N/A"])
+        vocab_lists.append(entries)
+
+    created_files: List[str] = []
+    for vocab_list, name in zip(vocab_lists, excel_names):
+        output = Path("res/Vocab List") / f"{name}.json"
+        writeIntoJson(vocab_list, str(output))
+        created_files.append(str(output))
+    return created_files
 
 
-def is_list_empty(lst):
-    return not lst  
+def is_list_empty(lst: Sequence[Any]) -> bool:
+    return not lst
 
-def _ensure_card_state(entry) -> CardState:
+
+# ---------------------------------------------------------------------------
+# Deck JSON storage
+# ---------------------------------------------------------------------------
+
+def _ensure_card_state(entry: Any) -> CardState:
     if isinstance(entry, CardState):
         return entry
     if isinstance(entry, Mapping):
         word = entry.get("word") or entry.get("card_id")
         if not word:
-            raise ValueError("Cannot convert dictionary entry to CardState without a word key")
+            raise ValueError(
+                "Cannot convert dictionary entry to CardState without a word key"
+            )
         return CardState.from_storage(word, entry)
     if isinstance(entry, Sequence) and not isinstance(entry, (str, bytes)) and len(entry) >= 3:
         return CardState.from_components(entry[0], entry[1], entry[2])
     raise TypeError("Unsupported vocab entry format")
 
 
-def writeIntoJson(vocab_list: Iterable, path: str):
-    if checkExist(path) == False:
-        vocab = {}
-        for entry in vocab_list:
-            card_state = _ensure_card_state(entry)
-            vocab[card_state.word] = card_state.to_storage_dict()
-
-        list = path.split("/")
-        vocab["XXX"] = {
-            "Name":os.path.splitext(list[len(list)-1])[0],
-            "CurrentNum":1,
-            "Completed":False,
-            "Learning":False,
+def writeIntoJson(vocab_list: Iterable[Any], path: str) -> None:
+    vocab: Dict[str, Any] = {}
+    for entry in vocab_list:
+        card_state = _ensure_card_state(entry)
+        vocab[card_state.word] = {
+            "definition": card_state.definition,
+            "example": card_state.example,
+            "card_id": card_state.card_id,
         }
-        
-        # with open(f"others/json/test1.json", "w") as f:
-        #     json.dump(vocab, f, indent=4)
-                
-        with open(path, "w",encoding='utf-8') as f:
-            json.dump(vocab, f, indent=4)
-
-def readFromJson(path):
-    if checkExist(path):
-        listInfo = None
-        with open(path, "r", encoding='utf-8') as f:
-            loaded_vocab = json.load(f)
-
-        # Print nicely
-        vocab_list = []
-        for word, info in loaded_vocab.items():
-            if word != "XXX":
-                vocab_list.append(CardState.from_storage(word, info))
-            else:
-                listInfo = [info['Name'], info['CurrentNum'], info['Completed'], info['Learning']]
-        if listInfo == None:
-            return vocab_list
-        else:
-            return vocab_list, listInfo
+    deck_path = Path(path)
+    deck_info = {
+        "Name": deck_path.stem,
+        "CurrentNum": 1,
+        "Completed": False,
+        "Learning": False,
+    }
+    vocab["XXX"] = deck_info
+    _write_json(deck_path, vocab)
 
 
 def _load_vocab_payload(path: str) -> MutableMapping[str, Any]:
-    with open(path, "r", encoding="utf-8") as handle:
-        return json.load(handle)
+    return _load_json(Path(path))
 
 
 def _write_vocab_payload(path: str, payload: Mapping[str, Any]) -> None:
-    with open(path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=4)
+    _write_json(Path(path), payload)
+
+
+def _index_states_for_user(user_id: Optional[str]) -> Dict[Tuple[str, str], CardState]:
+    records = _read_jsonl(STATE_FILE)
+    indexed: Dict[Tuple[str, str], CardState] = {}
+    for record in records:
+        state = _record_to_state(record)
+        key_user = _normalise_user_id(user_id)
+        record_user = _normalise_user_id(state.user_id)
+        if user_id is not None and record_user != key_user:
+            continue
+        card_key = state.card_id or state.word
+        indexed[(record_user, card_key)] = state
+        indexed[(record_user, state.word)] = state
+    return indexed
+
+
+def _resolve_stored_state(
+    indexed: Mapping[Tuple[str, str], CardState],
+    user_id: Optional[str],
+    card: CardState,
+) -> Optional[CardState]:
+    key_user = _normalise_user_id(user_id)
+    primary_key = (key_user, card.card_id or card.word)
+    if primary_key in indexed:
+        return indexed[primary_key]
+    secondary_key = (key_user, card.word)
+    return indexed.get(secondary_key)
+
+
+def readFromJson(path: str, user_id: Optional[str] = None):
+    payload = _load_vocab_payload(path)
+    vocab_list: List[CardState] = []
+    list_info = None
+    stored_states = _index_states_for_user(user_id)
+
+    for word, data in payload.items():
+        if word == "XXX":
+            list_info = [
+                data.get("Name"),
+                data.get("CurrentNum", 1),
+                data.get("Completed", False),
+                data.get("Learning", False),
+            ]
+            continue
+        card_state = CardState.from_storage(word, data if isinstance(data, Mapping) else {})
+        if user_id is not None:
+            stored = _resolve_stored_state(stored_states, user_id, card_state)
+        else:
+            stored = _resolve_stored_state(stored_states, DEFAULT_USER_ID, card_state)
+        if stored:
+            stored.definition = card_state.definition or stored.definition
+            stored.example = card_state.example or stored.example
+            stored.word = card_state.word or stored.word
+            card_state = stored
+        vocab_list.append(card_state)
+
+    if list_info is None:
+        return vocab_list
+    return vocab_list, list_info
 
 
 def update_card_state(path: str, word_id: str, state: Any) -> None:
-    """Persist the latest :class:`CardState` for *word_id* in *path*."""
-
-    if not checkExist(path):
-        raise FileNotFoundError(f"Vocabulary file does not exist: {path}")
-
     card_state = _ensure_card_state(state)
     payload = _load_vocab_payload(path)
-
-    target_key = word_id if word_id in payload else card_state.word
-    if target_key not in payload:
-        # Fallback to lookup by stored card_id in case the key differs from the
-        # human readable word.
-        for key, value in payload.items():
-            if key == "XXX":
-                continue
-            if isinstance(value, Mapping) and value.get("card_id") == word_id:
-                target_key = key
-                break
-        else:
-            raise KeyError(f"Card '{word_id}' not found in {path}")
-
-    payload[target_key] = card_state.to_storage_dict()
-    _write_vocab_payload(path, payload)
-
-
-def append_review_log(path: str, log_entry: Mapping[str, Any]) -> Dict[str, Any]:
-    """Append *log_entry* to the history for a card in *path*.
-
-    The *log_entry* must contain either a ``card_id`` or ``word`` key so that
-    the corresponding record can be located. The updated card payload is
-    returned to the caller for further processing if needed.
-    """
-
-    if not checkExist(path):
-        raise FileNotFoundError(f"Vocabulary file does not exist: {path}")
-
-    if not isinstance(log_entry, Mapping):
-        raise TypeError("log_entry must be a mapping containing card metadata")
-
-    word_id = log_entry.get("card_id") or log_entry.get("word")
-    if not word_id:
-        raise ValueError("log_entry must define a 'card_id' or 'word' field")
-
-    payload = _load_vocab_payload(path)
-    entry_key = word_id if word_id in payload else None
-    if entry_key is None:
-        for key, value in payload.items():
-            if key == "XXX":
-                continue
-            if isinstance(value, Mapping) and value.get("card_id") == word_id:
-                entry_key = key
-                break
-
-    if entry_key is None or entry_key not in payload:
+    if word_id not in payload:
         raise KeyError(f"Card '{word_id}' not found in {path}")
-
-    entry_payload = payload[entry_key]
-    history = entry_payload.get("history")
-    if not isinstance(history, list):
-        history = []
-    history.append(dict(log_entry))
-    entry_payload["history"] = history
-    payload[entry_key] = entry_payload
-
+    payload[word_id] = card_state.to_storage_dict()
     _write_vocab_payload(path, payload)
-    return entry_payload
-    
-def getListInfo(path):
-    if checkExist(path):
-        return readFromJson(path)[1]
-    
-def writeListInfo(path, name:str = None, currentNum:int = None, completed:bool = None, learning:bool = None):
-    with open(path, 'r+', encoding='utf-8') as f:
-        data = json.load(f)  
-        data["XXX"]['Name'] = name if name != None else data["XXX"]['Name']
-        data["XXX"]['CurrentNum'] = currentNum if currentNum != None else data["XXX"]['CurrentNum']
-        data["XXX"]['Completed'] = completed if completed != None else data["XXX"]['Completed']
-        data["XXX"]['Learning'] = learning if learning != None else data["XXX"]['Learning']
-        f.seek(0)
-        json.dump(data, f, indent=4)
-        f.truncate() 
-        
-def checkExist(path) -> bool:
-    filepath = path
-    if os.path.exists(filepath):
-        print("File exists")
-        return True
-    else:
-        print("File does not exist ")
-        return False
 
-def getFileName():
-    # Get all file and folder names
-    folder_path = "res/Vocab List" # Find the vocabulary excel documents
-    
-    # Filter to include only files
-    # files = [f for f in all_items if os.path.isfile(os.path.join(folder_path, f))]
-    
-    files = [
-        os.path.join(folder_path, f)  # take only the name, not the extension
-        for f in os.listdir(folder_path)
-        if os.path.isfile(os.path.join(folder_path, f))
-    ]
-    
-    # if 'Complete List.xlsx' in files:
-    #     files.remove('Complete List.xlsx')
-    #     files.insert(0, 'Complete List.xlsx')
-    if 'res/Vocab List/.DS_Store' in files:
-        files.remove('res/Vocab List/.DS_Store')
+
+def getListInfo(path: str):
+    result = readFromJson(path)
+    if isinstance(result, tuple):
+        return result[1]
+    return None
+
+
+def writeListInfo(
+    path: str,
+    name: Optional[str] = None,
+    currentNum: Optional[int] = None,
+    completed: Optional[bool] = None,
+    learning: Optional[bool] = None,
+) -> None:
+    data = _load_vocab_payload(path)
+    deck_info = data.setdefault(
+        "XXX",
+        {
+            "Name": Path(path).stem,
+            "CurrentNum": 1,
+            "Completed": False,
+            "Learning": False,
+        },
+    )
+    if name is not None:
+        deck_info["Name"] = name
+    if currentNum is not None:
+        deck_info["CurrentNum"] = currentNum
+    if completed is not None:
+        deck_info["Completed"] = completed
+    if learning is not None:
+        deck_info["Learning"] = learning
+    _write_vocab_payload(path, data)
+
+
+def checkExist(path: str) -> bool:
+    return Path(path).exists()
+
+
+def getFileName() -> List[str]:
+    files: List[str] = []
+    for root in DECK_ROOTS[1:]:
+        if not root.exists():
+            continue
+        for file_path in root.iterdir():
+            if file_path.is_file() and file_path.suffix == ".json":
+                files.append(str(file_path))
     return files
 
-importFromExcel("YourLists")
-# writeListInfo("others/json/","testList")
+
+# ---------------------------------------------------------------------------
+# Card state store (JSONL)
+# ---------------------------------------------------------------------------
+
+def load_card_states(user_id: Optional[str] = None) -> Dict[str, CardState]:
+    indexed = _index_states_for_user(user_id)
+    key_user = _normalise_user_id(user_id)
+    return {
+        card_key: state
+        for (user_key, card_key), state in indexed.items()
+        if user_key == key_user
+    }
 
 
-# vocab_list = [
-#     ["whoever","""[pron.] 无论谁；…的那个人（或那些人）；…的任何人；不管什么人
-# [网络] 爱谁谁；究竟是谁；无论是谁""",""" [1] Claudia is right, I mean two days ago you were fighting with her and telling whoever wanted to listen that you were happy with Minmei.
-# [2] Whoever curses his father or his mother, his lamp shall be put out in deep darkness.
-# [3] We were in front of a bar and he ducked slightly, peering in, but whoever he was looking for did not seem to be there."""],
-#     ["argue","""[v.] 争论；争辩；争吵；论证
-# [网络] 辩论；说服；主张""","""[1] it seems useless for you to argue further with him.
-# [2] While gold supply is well understood, silver bulls and bears argue about just how much silver is out there.
-# [3] Sullivan sighed, but he did not argue. ""I think I'll miss you, Jonathan, "" was all he said."""],
-#     ["behalf","""[n.] 利益
-# [网络] 方面；支持；维护""","""[1] Isaac prayed to the Lord on behalf of his wife, because she was barren.
-# [2] You will also learn about our many operations on your behalf, to prevent the dark Ones from destroying you and Mother Earth.
-# [3] The United States is ready to join a global effort on behalf of new jobs and sustainable growth."""]]
+def save_card_state(state: CardState, *, user_id: Optional[str] = None) -> CardState:
+    record = _state_to_record(state, user_id=user_id)
+    records = _read_jsonl(STATE_FILE)
+    key = _state_record_key(record)
+    updated = False
+    for stored in records:
+        if _state_record_key(stored) == key:
+            stored.update(record)
+            updated = True
+            break
+    if not updated:
+        records.append(record)
+    _write_jsonl(STATE_FILE, records)
+    return _record_to_state(record)
 
 
-# writeIntoJson(vocab_list, "others/json/hahha.json")
-# print(readFromJson("others/json/hahha.json"))
-# print(getListInfo("others/json/hahha.json"))
+def save_card_states(states: Iterable[CardState], *, user_id: Optional[str] = None) -> None:
+    records = _read_jsonl(STATE_FILE)
+    record_map = {_state_record_key(record): record for record in records}
+    for state in states:
+        record = _state_to_record(state, user_id=user_id)
+        record_map[_state_record_key(record)] = record
+    _write_jsonl(STATE_FILE, record_map.values())
 
-# writeListInfo("others/json/hahha.json", "jack", 3,False)
-print(getFileName())
+
+def append_review_log(log_entry: Mapping[str, Any]) -> Dict[str, Any]:
+    if not isinstance(log_entry, Mapping):
+        raise TypeError("log_entry must be a mapping containing card metadata")
+    record = dict(log_entry)
+    record.setdefault("logged_at", _utc_now().isoformat().replace("+00:00", "Z"))
+    required = {"user_id", "card_id", "grade", "interval_days", "success", "w_version"}
+    missing = [field for field in required if field not in record]
+    if missing:
+        raise ValueError(f"log_entry is missing required fields: {', '.join(missing)}")
+    before = record.get("before_state")
+    after = record.get("after_state")
+    if isinstance(before, CardState):
+        record["before_state"] = before.to_storage_dict()
+    if isinstance(after, CardState):
+        record["after_state"] = after.to_storage_dict()
+    _ensure_parent(LOG_FILE)
+    with LOG_FILE.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False))
+        handle.write("\n")
+    return record
 
 
+# ---------------------------------------------------------------------------
+# Migration utilities
+# ---------------------------------------------------------------------------
+
+def _iter_deck_files(paths: Optional[Iterable[Path]] = None) -> Iterator[Path]:
+    roots = list(paths) if paths is not None else DECK_ROOTS
+    for root in roots:
+        if not root.exists():
+            continue
+        if root.is_file() and root.suffix == ".json":
+            yield root
+        elif root.is_dir():
+            for candidate in sorted(root.rglob("*.json")):
+                if candidate.is_file():
+                    yield candidate
 
 
-# Stored basic list data in json file
-# Added list info at line 102. [name(str), CurrentNum(int), Completed(bool), Learning(bool)]
+def migrate_decks_to_state_store(
+    user_id: Optional[str] = None,
+    *,
+    default_phase: str = "new",
+    default_w_version: Optional[str] = None,
+    paths: Optional[Iterable[Path]] = None,
+) -> List[Path]:
+    updated: List[Path] = []
+    for deck_path in _iter_deck_files(paths):
+        payload = _load_json(deck_path)
+        changed = False
+        for word, data in payload.items():
+            if word == "XXX" or not isinstance(data, Mapping):
+                continue
+            state = CardState.from_storage(word, data)
+            if not state.phase:
+                state.phase = default_phase
+            if state.w_version is None and default_w_version is not None:
+                state.w_version = str(default_w_version)
+            if state.due_at is None and state.phase in {"learning", "review"}:
+                state.due_at = _utc_now()
+            state.user_id = user_id or state.user_id
+            save_card_state(state, user_id=user_id)
+            changed = True
+        if changed:
+            updated.append(deck_path)
+    return updated
+
+
+__all__ = [
+    "append_review_log",
+    "checkExist",
+    "getFileName",
+    "getListInfo",
+    "importFromExcel",
+    "is_list_empty",
+    "load_card_states",
+    "migrate_decks_to_state_store",
+    "readFromJson",
+    "save_card_state",
+    "save_card_states",
+    "update_card_state",
+    "writeIntoJson",
+    "writeListInfo",
+]

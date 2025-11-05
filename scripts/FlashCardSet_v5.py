@@ -1,8 +1,9 @@
 import flet as ft
-from typing import List, Optional, Sequence
+from typing import Callable, List, Optional, Sequence
 
 import scripts.FlashCard_v2 as FlashCard
 from scripts.card_state import CardState
+from scripts import review_service
 
 
 class FlashCardSet(ft.Container):
@@ -15,6 +16,7 @@ class FlashCardSet(ft.Container):
         index: int = 1,
         completed: bool = False,
         learning: bool = False,
+        on_grade: Optional[Callable[[CardState, str], None]] = None,
     ) -> None:
         super().__init__()
 
@@ -29,20 +31,43 @@ class FlashCardSet(ft.Container):
 
         self.index = max(0, min(len(self.flashcards) - 1, index - 1))
         self.current_card = self.flashcards[self.index]
+        self.on_grade = on_grade
 
         self.completed = completed
         self.learning = learning
-        
-        self.left_button = ft.FloatingActionButton(icon=ft.Icons.ARROW_LEFT, on_click= self.Last_Card)
-        self.right_button = ft.FloatingActionButton(icon=ft.Icons.ARROW_RIGHT, on_click= self.Next_Card)
-        
+
+        self.left_button = ft.FloatingActionButton(
+            icon=ft.Icons.ARROW_LEFT, on_click=self.Last_Card
+        )
+        self.right_button = ft.FloatingActionButton(
+            icon=ft.Icons.ARROW_RIGHT, on_click=self.Next_Card
+        )
+
+        self.grade_buttons = ft.Row(
+            controls=[
+                ft.ElevatedButton("Again", on_click=lambda e: self._handle_grade("again")),
+                ft.ElevatedButton("Hard", on_click=lambda e: self._handle_grade("hard")),
+                ft.ElevatedButton("Good", on_click=lambda e: self._handle_grade("good")),
+                ft.ElevatedButton("Easy", on_click=lambda e: self._handle_grade("easy")),
+            ],
+            alignment=ft.MainAxisAlignment.SPACE_EVENLY,
+        )
+
         self.Display = ft.Container(
-            content=ft.Row(
+            content=ft.Column(
                 controls=[
-                    self.left_button,
-                    ft.Container(content = self.current_card,expand=True),
-                    self.right_button
-                ],expand=True
+                    ft.Row(
+                        controls=[
+                            self.left_button,
+                            ft.Container(content=self.current_card, expand=True),
+                            self.right_button,
+                        ],
+                        expand=True,
+                    ),
+                    self.grade_buttons,
+                ],
+                expand=True,
+                alignment=ft.MainAxisAlignment.CENTER,
             ),
             bgcolor = ft.Colors.GREY_200,
             border_radius = 20,
@@ -137,6 +162,13 @@ class FlashCardSet(ft.Container):
 
     def get_card_state(self, index: Optional[int] = None) -> CardState:
         return self._resolve_state(index)
+
+    def _handle_grade(self, grade: str) -> None:
+        card_state = self.get_card_state()
+        if self.on_grade is not None:
+            self.on_grade(card_state, grade)
+        else:
+            review_service.submit_grade_sync(card_state, grade)
 
 def main(page: ft.Page):
     page.title = "Flashcards"
