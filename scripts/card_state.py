@@ -60,6 +60,18 @@ class CardState:
         FSRS scheduling attributes tracked per card.
     custom_data / metadata:
         Containers for scheduler specific state that we do not interpret yet.
+    user_id:
+        Identifier that links the card to a specific learner profile if
+        multi-user data is persisted.
+    phase:
+        Current learning phase label. Defaults to ``"new"``.
+    last_success_at:
+        Timestamp of the most recent successful review.
+    same_day_success:
+        Number of successes recorded for the current calendar day.
+    w_version:
+        Version marker for the FSRS weight configuration used to schedule the
+        card.
     """
 
     word: str
@@ -76,10 +88,33 @@ class CardState:
     history: List[Dict[str, Any]] = field(default_factory=list)
     custom_data: Dict[str, Any] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    user_id: Optional[str] = None
+    phase: str = "new"
+    last_success_at: Optional[datetime] = None
+    same_day_success: int = 0
+    w_version: Optional[int] = None
 
     def __post_init__(self) -> None:
         if self.card_id is None:
             self.card_id = self.word
+        if not self.phase:
+            self.phase = "new"
+        if not isinstance(self.same_day_success, int):
+            try:
+                self.same_day_success = int(self.same_day_success)
+            except (TypeError, ValueError):
+                self.same_day_success = 0
+        if self.last_success_at not in (None, "") and not isinstance(
+            self.last_success_at, datetime
+        ):
+            self.last_success_at = _parse_datetime(self.last_success_at)
+        if self.w_version not in (None, ""):
+            try:
+                self.w_version = int(self.w_version)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                self.w_version = None
+        else:
+            self.w_version = None
 
     # ------------------------------------------------------------------
     # Serialisation helpers
@@ -90,11 +125,43 @@ class CardState:
         word: str,
         definition: str,
         example: str,
+        *,
+        user_id: Optional[str] = None,
+        phase: Optional[Any] = None,
+        last_success_at: Optional[Any] = None,
+        same_day_success: int = 0,
+        w_version: Optional[Any] = None,
         **kwargs: Any,
     ) -> "CardState":
-        """Construct a card state from the basic UI components."""
+        """Construct a card state from the basic UI components.
 
-        return cls(word=word, definition=definition, example=example, **kwargs)
+        Parameters other than ``word``, ``definition`` and ``example`` are optional
+        and mirror the dataclass attributes so callers can seed new instances with
+        scheduler metadata without touching :class:`CardState` directly.
+        """
+
+        phase_value = str(phase) if phase not in (None, "") else "new"
+        parsed_success_at = _parse_datetime(last_success_at)
+        w_version_value: Optional[int]
+        if w_version in (None, ""):
+            w_version_value = None
+        else:
+            try:
+                w_version_value = int(w_version)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                w_version_value = None
+
+        return cls(
+            word=word,
+            definition=definition,
+            example=example,
+            user_id=user_id,
+            phase=phase_value,
+            last_success_at=parsed_success_at,
+            same_day_success=int(same_day_success or 0),
+            w_version=w_version_value,
+            **kwargs,
+        )
 
     @classmethod
     def from_storage(cls, word: str, payload: Mapping[str, Any]) -> "CardState":
@@ -113,6 +180,16 @@ class CardState:
         )
         custom_data = dict(payload.get("custom_data", {}))
         new_buried = bool(payload.get("new_buried", False))
+        user_id = payload.get("user_id")
+        phase_raw = payload.get("phase")
+        phase = str(phase_raw) if phase_raw not in (None, "") else "new"
+        last_success_at = _parse_datetime(payload.get("last_success_at"))
+        same_day_success = int(payload.get("same_day_success", 0) or 0)
+        w_version_raw = payload.get("w_version")
+        try:
+            w_version = int(w_version_raw) if w_version_raw not in (None, "") else None
+        except (TypeError, ValueError):
+            w_version = None
         raw_history = payload.get("history", [])
         history: List[Dict[str, Any]] = []
         if isinstance(raw_history, Sequence) and not isinstance(
@@ -138,6 +215,11 @@ class CardState:
             new_buried=new_buried,
             history=history,
             custom_data=custom_data,
+            user_id=user_id,
+            phase=phase,
+            last_success_at=last_success_at,
+            same_day_success=same_day_success,
+            w_version=w_version,
         )
 
         known_keys = {
@@ -157,6 +239,11 @@ class CardState:
             "history",
             "custom_data",
             "metadata",
+            "user_id",
+            "phase",
+            "last_success_at",
+            "same_day_success",
+            "w_version",
         }
 
         metadata = dict(payload.get("metadata", {}))
@@ -207,6 +294,26 @@ class CardState:
             self.custom_data = dict(payload.get("custom_data", {}))
         if "metadata" in payload:
             self.metadata = dict(payload.get("metadata", {}))
+        if "user_id" in payload:
+            user_id = payload.get("user_id")
+            self.user_id = user_id if user_id not in ("", None) else None
+        if "phase" in payload:
+            phase_value = payload.get("phase")
+            self.phase = (
+                str(phase_value) if phase_value not in (None, "") else "new"
+            )
+        if "last_success_at" in payload:
+            self.last_success_at = _parse_datetime(payload.get("last_success_at"))
+        if "same_day_success" in payload:
+            self.same_day_success = int(payload.get("same_day_success", 0) or 0)
+        if "w_version" in payload:
+            w_version_raw = payload.get("w_version")
+            try:
+                self.w_version = (
+                    int(w_version_raw) if w_version_raw not in (None, "") else None
+                )
+            except (TypeError, ValueError):
+                self.w_version = None
 
         known_keys = {
             "definition",
@@ -225,6 +332,11 @@ class CardState:
             "history",
             "custom_data",
             "metadata",
+            "user_id",
+            "phase",
+            "last_success_at",
+            "same_day_success",
+            "w_version",
         }
         extras = {k: v for k, v in payload.items() if k not in known_keys}
         if extras:
@@ -253,6 +365,15 @@ class CardState:
             "new_buried": self.new_buried,
             "history": serialised_history,
         }
+        if self.user_id is not None:
+            data["user_id"] = self.user_id
+        if self.phase:
+            data["phase"] = self.phase
+        if self.last_success_at is not None:
+            data["last_success_at"] = _format_datetime(self.last_success_at)
+        data["same_day_success"] = int(self.same_day_success or 0)
+        if self.w_version is not None:
+            data["w_version"] = self.w_version
         if self.custom_data:
             data["custom_data"] = self.custom_data
         if self.metadata:
@@ -262,6 +383,56 @@ class CardState:
     # ------------------------------------------------------------------
     # Convenience helpers
     # ------------------------------------------------------------------
+    def reset_same_day_counters(self) -> None:
+        """Clear same-day review bookkeeping for the card."""
+
+        self.same_day_success = 0
+
+    def advance_phase(
+        self,
+        *,
+        order: Sequence[str] = ("new", "learning", "review", "relearning"),
+        wrap: bool = False,
+    ) -> str:
+        """Advance :attr:`phase` to the next value in *order*.
+
+        Parameters
+        ----------
+        order:
+            Iterable of phase labels defining the progression. Defaults to the
+            common FSRS stages.
+        wrap:
+            When ``True`` the progression wraps around to the first element once
+            the end of *order* is reached. Otherwise the final value is kept.
+
+        Returns
+        -------
+        str
+            The updated phase label.
+        """
+
+        if not order:
+            raise ValueError("Phase order must define at least one entry")
+
+        current = str(self.phase) if self.phase not in (None, "") else order[0]
+        normalised = {value: value for value in order}
+        lower_map = {value.lower(): value for value in order}
+        canonical = normalised.get(current)
+        if canonical is None:
+            canonical = lower_map.get(current.lower()) if isinstance(current, str) else None
+        if canonical is None:
+            self.phase = order[0]
+            return self.phase
+
+        index = order.index(canonical)
+        if index + 1 < len(order):
+            self.phase = order[index + 1]
+        elif wrap:
+            self.phase = order[0]
+        else:
+            self.phase = canonical
+        return self.phase
+
     def to_vocab_row(self) -> Sequence[str]:
         """Return the legacy `[word, definition, example]` triple."""
 

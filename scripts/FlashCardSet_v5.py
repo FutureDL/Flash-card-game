@@ -12,9 +12,9 @@ class FlashCardSet(ft.Container):
     def __init__(
         self,
         cards: Sequence[CardState],
-        index: int,
-        completed: bool,
-        learning: bool,
+        index: int = 1,
+        completed: bool = False,
+        learning: bool = False,
     ) -> None:
         super().__init__()
 
